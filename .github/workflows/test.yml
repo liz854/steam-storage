@@ -12,8 +12,8 @@ jobs:
       matrix:
         python-version: ["3.8", "3.12"]
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
         with:
           python-version: ${{ matrix.python-version }}
       - name: 单元测试
@@ -32,10 +32,10 @@ jobs:
   js:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with:
-          node-version: "20"
+          node-version: "22"
       - name: 布局与渲染校验
         run: |
           node test/check_layout.js
