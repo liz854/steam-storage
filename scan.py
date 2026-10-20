@@ -457,10 +457,8 @@ def build_payload(steam_root: Path):
 # 游戏封面：优先取 Steam 客户端已经缓存好的图，本地没有才退到官方 CDN
 # ---------------------------------------------------------------------------
 # 卡片墙里的卡片是横的，只认横版 header。竖版封面（library_600x900，300x450）放进横块里
-# 等比缩放后左右会空出一大片，看着像贴错了，所以只当最后的兜底。
+# 等比缩放后左右会空出一大片，看着像贴错了 —— 这种游戏改由 CDN 上的横版兜底。
 LANDSCAPE_PATTERNS = ("header.jpg", "header_*.jpg")
-PORTRAIT_PATTERNS = ("library_600x900.jpg", "library_600x900_*.jpg")
-COVER_PATTERNS = LANDSCAPE_PATTERNS + PORTRAIT_PATTERNS
 MAX_COVER_BYTES = 320 * 1024
 
 # Steam 官方静态资源，公开、无需 key、带 Access-Control-Allow-Origin: *
@@ -468,11 +466,11 @@ MAX_COVER_BYTES = 320 * 1024
 STEAM_CDN = "https://cdn.cloudflare.steamstatic.com/steam/apps"
 
 
-def find_cover(steam_root, appid, landscape_only=True):
-    """在 appcache/librarycache/<appid>/ 下找一张封面，找不到返回 None。
+def find_cover(steam_root, appid):
+    """在 appcache/librarycache/<appid>/ 下找一张横版 header，找不到返回 None。
 
-    landscape_only=True 时只看横版 header；本地缓存里常常只有竖版封面，
-    那就交给 CDN 去取横版，免得横块里塞一张竖图。
+    本地缓存里常常只有竖版封面（library_600x900），这里直接返回 None，
+    由调用方回退到 CDN 的横版 —— 横卡片里塞一张竖图，等比缩放后左右全是空白。
     """
     if not steam_root:
         return None
@@ -483,8 +481,7 @@ def find_cover(steam_root, appid, landscape_only=True):
     except OSError:
         return None
 
-    patterns = LANDSCAPE_PATTERNS if landscape_only else COVER_PATTERNS
-    for pattern in patterns:
+    for pattern in LANDSCAPE_PATTERNS:
         for p in sorted(cache.glob(pattern)):
             try:
                 if p.is_file() and 1024 < p.stat().st_size <= MAX_COVER_BYTES:

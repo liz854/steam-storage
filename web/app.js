@@ -704,7 +704,7 @@
   var libInfos = []; // 已加载的库
 
   function setTop(html) {
-    var el = $('#topLine');
+    var el = $('#subline');
     if (el) el.innerHTML = html;
   }
 

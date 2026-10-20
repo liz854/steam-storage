@@ -147,7 +147,7 @@ const wait = ms => new Promise(r => setTimeout(r, ms));
     assert(treemap.includes('Counter-Strike 2'), '页面显示游戏名');
     assert(get('#tbody').innerHTML.includes('68.8 GB'), '表格显示占用大小');
     assert(get('#tbody').innerHTML.includes('494 小时'), '从 localconfig.vdf 读到游玩时长');
-    assert(get('#topLine').innerHTML.includes('Steam'), '顶部说明数据来源');
+    assert(get('#subline').innerHTML.includes('Steam'), '顶部说明数据来源');
     assert(get('#view').classList.contains('show'), '结果区已展开');
   }
 

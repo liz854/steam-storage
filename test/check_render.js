@@ -278,5 +278,20 @@ try {
   assert(!tm.includes('has-cover') && tm.includes('background:hsl'), '没有封面时退回纯色块');
 }
 
+{
+  // 页面骨架校验：下面这些节点是 renderReport 直接写 innerHTML 的地方，
+  // 少一个浏览器里就抛 TypeError，整页渲染中断。
+  // DOM 桩对任何选择器都返回对象，所以必须真去读 HTML 才能发现这类缺失。
+  const need = ['stats', 'subline', 'foot', 'treemap', 'legend',
+    'rank', 'tbody', 'mapTitle', 'libChips'];
+  for (const f of ['web/index.html', 'templates/report.html']) {
+    const html = fs.readFileSync(path.join(dir, f), 'utf8');
+    const have = new Set([...html.matchAll(/id="([\w-]+)"/g)].map(m => m[1]));
+    const miss = need.filter(id => !have.has(id));
+    assert(miss.length === 0,
+      f + ' 含渲染必需的节点' + (miss.length ? '（缺 #' + miss.join(', #') + '）' : ''));
+  }
+}
+
 console.log(failed ? `\n${failed} 项失败` : '\n全部通过');
 process.exit(failed ? 1 : 0);

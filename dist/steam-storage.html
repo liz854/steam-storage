@@ -220,7 +220,7 @@ footer a{color:var(--dim)}
 
 <header>
   <div class="brand"><span class="dot"></span><h1>Steam 存储可视化</h1></div>
-  <div class="sub" id="topLine">正在检测 Steam 目录…</div>
+  <div class="sub" id="subline">正在检测 Steam 目录…</div>
 </header>
 
 <!-- 检测 / 手动指定 -->
@@ -1037,7 +1037,7 @@ footer a{color:var(--dim)}
   var libInfos = []; // 已加载的库
 
   function setTop(html) {
-    var el = $('#topLine');
+    var el = $('#subline');
     if (el) el.innerHTML = html;
   }
 
