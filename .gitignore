@@ -1,0 +1,28 @@
+# 本地生成物（含本机游戏列表，不该进公开仓库）
+data.json
+steam_storage_report.html
+*.report.html
+*.report.json
+
+# Pages 部署时 CI 会往 web/ 拷一份单文件版，本地不需要提交
+web/steam-storage.html
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+*.egg-info/
+build/
+# PyInstaller 产物
+*.spec
+
+# Node
+node_modules/
+package-lock.json
+
+# 编辑器 / 系统
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+*.swp

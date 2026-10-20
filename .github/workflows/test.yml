@@ -1,0 +1,43 @@
+name: Tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  python:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.8", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: 单元测试
+        run: python -m unittest discover -s test -p "test_*.py" -v
+      - name: 单文件版是否与源码同步
+        if: matrix.python-version == '3.12'
+        run: |
+          python tools/build_single.py
+          if ! git diff --quiet -- dist/steam-storage.html; then
+            echo "::error::dist/steam-storage.html 与 web/ 源码不一致"
+            echo "本地执行 python tools/build_single.py 后提交产物"
+            git diff --stat -- dist/steam-storage.html
+            exit 1
+          fi
+
+  js:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: 布局与渲染校验
+        run: |
+          node test/check_layout.js
+          node test/check_render.js
+          node test/check_picker.js

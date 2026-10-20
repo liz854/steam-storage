@@ -1,0 +1,229 @@
+{
+  "generatedAt": "2026-01-01 00:00:00",
+  "version": "1.1.0",
+  "steamRoot": "D://Steam",
+  "libraries": [
+    {
+      "path": "D://Steam",
+      "total": 1000007168000,
+      "free": 350000000000,
+      "gameCount": 12,
+      "gameBytes": 136354474227
+    },
+    {
+      "path": "E://SteamLibrary",
+      "total": 1000007168000,
+      "free": 350000000000,
+      "gameCount": 8,
+      "gameBytes": 390949398117
+    }
+  ],
+  "games": [
+    {
+      "appid": 1174180,
+      "name": "Red Dead Redemption 2",
+      "size": 128312147968,
+      "playtime": 3600,
+      "lastPlayed": 1792041805,
+      "lastUpdated": 1792301005,
+      "installdir": "Red Dead Redemption 2",
+      "lib": "E://SteamLibrary"
+    },
+    {
+      "appid": 534380,
+      "name": "Dying Light 2: Reloaded Edition",
+      "size": 83537113907,
+      "playtime": 240,
+      "lastPlayed": 1785648205,
+      "lastUpdated": 1790400205,
+      "installdir": "Dying Light 2: Reloaded Edition",
+      "lib": "E://SteamLibrary"
+    },
+    {
+      "appid": 730,
+      "name": "Counter-Strike 2",
+      "size": 73873437491,
+      "playtime": 29640,
+      "lastPlayed": 1792041805,
+      "lastUpdated": 1792301005,
+      "installdir": "Counter-Strike 2",
+      "lib": "D://Steam"
+    },
+    {
+      "appid": 312660,
+      "name": "Sniper Elite 4",
+      "size": 58841051955,
+      "playtime": 180,
+      "lastPlayed": 1782451405,
+      "lastUpdated": 1789449805,
+      "installdir": "Sniper Elite 4",
+      "lib": "E://SteamLibrary"
+    },
+    {
+      "appid": 1245620,
+      "name": "ELDEN RING",
+      "size": 55082955571,
+      "playtime": 4212,
+      "lastPlayed": 1788845005,
+      "lastUpdated": 1791350605,
+      "installdir": "ELDEN RING",
+      "lib": "E://SteamLibrary"
+    },
+    {
+      "appid": 570,
+      "name": "Dota 2",
+      "size": 45634027520,
+      "playtime": 3120,
+      "lastPlayed": 1788845005,
+      "lastUpdated": 1791350605,
+      "installdir": "Dota 2",
+      "lib": "D://Steam"
+    },
+    {
+      "appid": 418370,
+      "name": "Resident Evil 7 Biohazard",
+      "size": 31997506355,
+      "playtime": 660,
+      "lastPlayed": 1779254605,
+      "lastUpdated": 1788499405,
+      "installdir": "Resident Evil 7 Biohazard",
+      "lib": "E://SteamLibrary"
+    },
+    {
+      "appid": 203160,
+      "name": "Tomb Raider",
+      "size": 15354508083,
+      "playtime": 900,
+      "lastPlayed": 1776057805,
+      "lastUpdated": 1787549005,
+      "installdir": "Tomb Raider",
+      "lib": "E://SteamLibrary"
+    },
+    {
+      "appid": 1145360,
+      "name": "Hades",
+      "size": 11918534246,
+      "playtime": 1200,
+      "lastPlayed": 1772861005,
+      "lastUpdated": 1786598605,
+      "installdir": "Hades",
+      "lib": "E://SteamLibrary"
+    },
+    {
+      "appid": 33230,
+      "name": "Grand Theft Auto IV",
+      "size": 6442450944,
+      "playtime": 420,
+      "lastPlayed": 1772861005,
+      "lastUpdated": 1786598605,
+      "installdir": "Grand Theft Auto IV",
+      "lib": "D://Steam"
+    },
+    {
+      "appid": 242760,
+      "name": "The Forest",
+      "size": 5905580032,
+      "playtime": 45,
+      "lastPlayed": 1769664205,
+      "lastUpdated": 1785648205,
+      "installdir": "The Forest",
+      "lib": "E://SteamLibrary"
+    },
+    {
+      "appid": 210970,
+      "name": "The Witness",
+      "size": 4187593113,
+      "playtime": 95,
+      "lastPlayed": 1769664205,
+      "lastUpdated": 1785648205,
+      "installdir": "The Witness",
+      "lib": "D://Steam"
+    },
+    {
+      "appid": 701160,
+      "name": "Kingdom Come: Deliverance",
+      "size": 2469606195,
+      "playtime": 1560,
+      "lastPlayed": 1760073805,
+      "lastUpdated": 1782797005,
+      "installdir": "Kingdom Come: Deliverance",
+      "lib": "D://Steam"
+    },
+    {
+      "appid": 431960,
+      "name": "Wallpaper Engine",
+      "size": 826781204,
+      "playtime": 277,
+      "lastPlayed": 1763270605,
+      "lastUpdated": 1783747405,
+      "installdir": "Wallpaper Engine",
+      "lib": "D://Steam"
+    },
+    {
+      "appid": 105600,
+      "name": "Terraria",
+      "size": 805306368,
+      "playtime": 1686,
+      "lastPlayed": 1782451405,
+      "lastUpdated": 1789449805,
+      "installdir": "Terraria",
+      "lib": "D://Steam"
+    },
+    {
+      "appid": 413150,
+      "name": "Stardew Valley",
+      "size": 687194767,
+      "playtime": 834,
+      "lastPlayed": 1785648205,
+      "lastUpdated": 1790400205,
+      "installdir": "Stardew Valley",
+      "lib": "D://Steam"
+    },
+    {
+      "appid": 228980,
+      "name": "Steamworks Common Redistributables",
+      "size": 654982512,
+      "playtime": 0,
+      "lastPlayed": 1766467405,
+      "lastUpdated": 1784697805,
+      "installdir": "Steamworks Common Redistributables",
+      "lib": "D://Steam"
+    },
+    {
+      "appid": 646570,
+      "name": "Slay the Spire",
+      "size": 536870912,
+      "playtime": 1740,
+      "lastPlayed": 1779254605,
+      "lastUpdated": 1788499405,
+      "installdir": "Slay the Spire",
+      "lib": "D://Steam"
+    },
+    {
+      "appid": 993090,
+      "name": "Lossless Scaling",
+      "size": 182536110,
+      "playtime": 528,
+      "lastPlayed": 1756877005,
+      "lastUpdated": 1781846605,
+      "installdir": "Lossless Scaling",
+      "lib": "D://Steam"
+    },
+    {
+      "appid": 3590,
+      "name": "Plants vs. Zombies: Game of the Year",
+      "size": 53687091,
+      "playtime": 0,
+      "lastPlayed": 1776057805,
+      "lastUpdated": 1787549005,
+      "installdir": "Plants vs. Zombies: Game of the Year",
+      "lib": "D://Steam"
+    }
+  ],
+  "totals": {
+    "bytes": 527303872344,
+    "playtimeMinutes": 50937,
+    "count": 20,
+    "libraryCount": 2
+  }
+}

@@ -1,0 +1,84 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Steam 游戏占用可视化</title>
+<style>
+/*__STYLE__*/
+</style>
+</head>
+<body>
+
+<header>
+  <div class="brand"><span class="dot"></span><h1>Steam 游戏占用可视化</h1></div>
+  <div class="sub" id="subline"></div>
+</header>
+
+<section class="stats" id="stats"></section>
+
+<div class="toolbar">
+  <div class="search">
+    <svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg>
+    <input id="q" type="search" placeholder="搜索游戏名…" autocomplete="off">
+  </div>
+  <div class="chips" id="libChips"></div>
+  <div class="spacer"></div>
+  <div class="chips" id="metricChips">
+    <button class="chip on" data-metric="size">按存储</button>
+    <button class="chip" data-metric="playtime">按时长</button>
+  </div>
+  <span class="vsep"></span>
+  <button class="chip on" data-sort="metric">按大小</button>
+  <button class="chip" data-sort="name">按名称</button>
+  <button class="chip" data-sort="played">按最近启动</button>
+</div>
+
+<section class="viz">
+  <div class="card">
+    <div class="card-hd">
+      <h2 id="mapTitle">空间分布</h2>
+      <div class="legend" id="legend"></div>
+    </div>
+    <div id="treemap"></div>
+  </div>
+  <div class="card">
+    <div class="card-hd"><h2 id="rankTitle">占用排行</h2><span class="dim" style="font-size:11px" id="rankCount"></span></div>
+    <div class="rank" id="rank"></div>
+  </div>
+</section>
+
+<section class="card">
+  <div class="card-hd"><h2>全部游戏</h2><span class="dim" style="font-size:11px" id="tblCount"></span></div>
+  <div style="max-height:520px;overflow:auto">
+    <table>
+      <thead>
+        <tr>
+          <th data-k="idx" style="width:46px">#</th>
+          <th data-k="name">游戏</th>
+          <th data-k="size" class="num" style="width:100px">占用</th>
+          <th data-k="playtime" class="num" style="width:96px">时长</th>
+          <th data-k="metric" class="num" style="width:130px">占比</th>
+          <th data-k="libLabel" style="width:150px">位置</th>
+          <th data-k="lastPlayed" class="num" style="width:110px">最近启动</th>
+        </tr>
+      </thead>
+      <tbody id="tbody"></tbody>
+    </table>
+  </div>
+</section>
+
+<footer id="foot"></footer>
+<div id="tip"></div>
+
+<script>
+/*__DATA__*/
+</script>
+<script>
+/*__APP__*/
+</script>
+<script>
+renderReport(DATA);
+</script>
+</body>
+</html>

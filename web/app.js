@@ -1,0 +1,1339 @@
+/*
+ * Steam 存储可视化 —— 共用渲染逻辑
+ * ------------------------------------------------------------------
+ * 两个入口共用本文件：
+ *   1. 报告版（scan.py 生成）：构建时把本文件内联进单文件 HTML
+ *   2. Web 版（web/index.html）：浏览器里直接解析 .acf，挂 GitHub Pages
+ *
+ * 渲染入口只有一个：window.renderReport(data)
+ * data 结构见 README 的「数据格式」一节。
+ */
+(function () {
+  'use strict';
+
+  var HUES = [212, 276, 160, 28, 340, 196];
+  var GB = 1024 ** 3;
+  // Steam 横向封面 header.jpg 的宽高比。卡片朝这个比例排，封面才能正好填满。
+  var TARGET_AR = 460 / 215;
+
+  /* ------------------------------------------------------------------ */
+  /* 格式化                                                              */
+  /* ------------------------------------------------------------------ */
+  function fmt(n, d) {
+    if (d === undefined) d = 1;
+    if (n >= GB) return (n / GB).toFixed(d) + ' GB';
+    if (n >= 1024 ** 2) return (n / 1024 ** 2).toFixed(0) + ' MB';
+    if (n >= 1024) return (n / 1024).toFixed(0) + ' KB';
+    return n + ' B';
+  }
+  function fmtShort(n) {
+    if (n >= 1024 ** 4) return (n / 1024 ** 4).toFixed(2) + ' TB';
+    if (n >= GB) return (n / GB).toFixed(1) + ' GB';
+    return (n / 1024 ** 2).toFixed(0) + ' MB';
+  }
+  function daysSince(ts) {
+    if (!ts) return null;
+    return Math.floor((Date.now() / 1000 - ts) / 86400);
+  }
+  function dateStr(ts) {
+    if (!ts) return '—';
+    var d = new Date(ts * 1000);
+    return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0')
+      + '-' + String(d.getDate()).padStart(2, '0');
+  }
+  function ago(ts) {
+    var d = daysSince(ts);
+    if (d === null) return '未知';
+    if (d <= 0) return '今天';
+    if (d < 30) return d + ' 天前';
+    if (d < 365) return Math.floor(d / 30) + ' 个月前';
+    return Math.floor(d / 365) + ' 年前';
+  }
+  function esc(s) {
+    return String(s).replace(/[&<>"]/g, function (c) {
+      return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c];
+    });
+  }
+  function shortLib(p) {
+    return String(p)
+      .replace(/[\\/]steamapps$/i, '')
+      .replace(/[\\/]+$/, '');
+  }
+
+  /* 游玩时长：数据源单位是分钟 */
+  function fmtPlaytime(min) {
+    if (!min) return '—';
+    var h = min / 60;
+    if (h < 1) return min + ' 分钟';
+    if (h < 10) return h.toFixed(1) + ' 小时';
+    return Math.round(h) + ' 小时';
+  }
+  function fmtHours(min) {
+    if (!min) return '0';
+    var h = min / 60;
+    if (h >= 10000) return Math.round(h / 1000) + 'k 小时';
+    if (h >= 10) return Math.round(h).toLocaleString() + ' 小时';
+    if (h >= 1) return h.toFixed(1) + ' 小时';
+    return min + ' 分钟';
+  }
+  /* 每小时占用 / 每 GB 时长，用来衡量「这游戏值不值」 */
+  function hoursPerGb(g) {
+    if (!g.playtime || !g.size) return null;
+    return (g.playtime / 60) / (g.size / GB);
+  }
+
+  /* ------------------------------------------------------------------ */
+  /* 运行时状态                                                          */
+  /* ------------------------------------------------------------------ */
+  var DATA = null;
+  var libHue = new Map();
+  var gameById = new Map();
+  var state = { q: '', lib: 'all', sort: 'size', dir: -1, metric: 'size' };
+  var bound = false;
+  var $ = function (s) { return document.querySelector(s); };
+
+  /* 当前视图用的是哪个指标：磁盘占用 or 游玩时长 */
+  function metricOf(g) {
+    return state.metric === 'playtime' ? (g.playtime || 0) : g.size;
+  }
+  function metricLabel() {
+    return state.metric === 'playtime' ? '游玩时长' : '磁盘占用';
+  }
+  function fmtMetric(v) {
+    return state.metric === 'playtime' ? fmtHours(v) : fmtShort(v);
+  }
+
+  function tileColor(lib, rank, total, dark) {
+    var hue = libHue.has(lib) ? libHue.get(lib) : 212;
+    var t = total > 1 ? rank / (total - 1) : 0;
+    // dark 版留给铺封面的卡片当底：封面等比缩放后剩的那点空隙露出它，不抢眼
+    var light = dark ? (26 - t * 9) : (52 - t * 15);
+    return 'hsl(' + hue + ' ' + (62 - t * 16) + '% ' + light + '%)';
+  }
+
+  /* ------------------------------------------------------------------ */
+  /* 顶部统计                                                            */
+  /* ------------------------------------------------------------------ */
+  function renderStats() {
+    var games = DATA.games;
+    var totalBytes = DATA.totals.bytes;
+    var totalMin = DATA.totals.playtimeMinutes || 0;
+    var avg = totalBytes / games.length;
+
+    var longest = games.slice().sort(function (a, b) {
+      return (b.playtime || 0) - (a.playtime || 0);
+    })[0];
+
+    var stale = games.filter(function (g) {
+      var d = daysSince(g.lastPlayed);
+      return d !== null && d > 365;
+    });
+    var staleBytes = stale.reduce(function (a, g) { return a + g.size; }, 0);
+
+    var topCount = Math.max(1, Math.round(games.length * 0.1));
+    var topShare = games.slice(0, topCount).reduce(function (a, g) {
+      return a + g.size;
+    }, 0) / totalBytes * 100;
+
+    var cards = [
+      { k: '游戏总占用', v: fmtShort(totalBytes), m: '平均 ' + fmt(avg) + ' / 款' },
+      {
+        k: '累计游玩',
+        v: totalMin ? fmtHours(totalMin) : '无数据',
+        m: longest && longest.playtime
+          ? '最长 ' + longest.name + ' · ' + fmtPlaytime(longest.playtime)
+          : '没读到账号的时长记录'
+      },
+      { k: '游戏数量', v: games.length, m: DATA.libraries.length + ' 个游戏库' },
+      {
+        k: '一年以上没玩', v: stale.length,
+        m: '占 ' + fmtShort(staleBytes) + ' · 前 10% 游戏占 ' + topShare.toFixed(0) + '% 空间'
+      }
+    ];
+
+    $('#stats').innerHTML = cards.map(function (c) {
+      return '<div class="stat"><div class="k">' + c.k + '</div>'
+        + '<div class="v">' + c.v + '</div>'
+        + '<div class="m" title="' + esc(c.m) + '">' + esc(c.m) + '</div></div>';
+    }).join('');
+
+    var libParts = DATA.libraries.map(function (l) {
+      var s = shortLib(l.path) + ' · ' + l.gameCount + ' 个 · ' + fmtShort(l.gameBytes);
+      if (l.free != null) s += ' · 剩余 ' + fmtShort(l.free);
+      return s;
+    });
+
+    $('#subline').innerHTML =
+      '数据源 <code>appmanifest_*.acf</code> · Steam 目录 <code>' + esc(DATA.steamRoot) + '</code>'
+      + '<br>' + libParts.map(esc).join('　|　');
+
+    $('#foot').innerHTML =
+      '生成于 ' + esc(DATA.generatedAt) + ' · 共 ' + games.length + ' 个已安装游戏 · '
+      + '数值来自 Steam 清单文件的 <code>SizeOnDisk</code> 字段（与客户端的显示一致）<br>'
+      + '不含创意工坊内容与着色器缓存，实际磁盘占用会略高于此。';
+  }
+
+  /* ------------------------------------------------------------------ */
+  /* 库筛选 / 数据筛选                                                    */
+  /* ------------------------------------------------------------------ */
+  function renderChips() {
+    var items = [{ id: 'all', label: '全部库' }];
+    DATA.libraries.forEach(function (l) {
+      items.push({ id: l.path, label: shortLib(l.path) });
+    });
+    $('#libChips').innerHTML = items.map(function (it) {
+      return '<button class="chip' + (state.lib === it.id ? ' on' : '') + '"'
+        + ' data-lib="' + esc(it.id) + '">' + esc(it.label) + '</button>';
+    }).join('');
+  }
+
+  function currentGames() {
+    var q = state.q.trim().toLowerCase();
+    return DATA.games.filter(function (g) {
+      if (state.lib !== 'all' && g.lib !== state.lib) return false;
+      if (q && g.name.toLowerCase().indexOf(q) < 0) return false;
+      return true;
+    });
+  }
+
+  /* ------------------------------------------------------------------ */
+  /* 布局：卡片流，卡片一律取 Steam 横版封面的比例                        */
+  /* ------------------------------------------------------------------ */
+  /* 卡片的长宽比锁定成封面比例（460:215），封面才能正好铺满，不裁切也不拉伸。
+     排版方式是「卡片流」：卡片按行往下排，行尾自然空着，整张图不是一整块矩形，
+     画布高度跟着内容走，行内卡片垂直居中。
+
+     卡片宽 ∝ sqrt(占用)，高 = 宽 / 封面比例，所以面积仍然正比于占用。
+     唯一被牺牲的是极小的游戏：宽度有下限，否则名字和封面都看不见。 */
+  var COVER_AR = TARGET_AR;
+
+  /* flow：卡片按行往下流，行尾留空，画布高度跟着内容走 */
+  function layoutFlow(games, W, H, val) {
+    var valFn = val || function (g) { return g.size; };
+    var empty = { rects: [], height: 0 };
+    if (!games.length || W < 40) return empty;
+
+    var total = 0, i;
+    for (i = 0; i < games.length; i++) total += valFn(games[i]);
+    if (total <= 0) return empty;
+
+    var items = [];
+    for (i = 0; i < games.length; i++) {
+      items.push({ g: games[i], a: valFn(games[i]) / total });
+    }
+
+    var MIN_W = 96;                        // 再窄就放不下名字
+    var MAX_W = Math.max(MIN_W, W * 0.55); // 再宽就只剩它一块
+
+    function run(c) {
+      var out = [], x = 0, y = 0, rowH = 0, row = [];
+      function flush() {
+        for (var q = 0; q < row.length; q++) {
+          row[q].y = y + (rowH - row[q].h) / 2;   // 行内垂直居中
+          out.push(row[q]);
+        }
+        y += rowH;
+        x = 0; rowH = 0; row = [];
+      }
+      for (var n = 0; n < items.length; n++) {
+        // 宽 ∝ sqrt(面积)，高 = 宽 / 封面比例 → 面积仍正比于占用
+        var w = c * Math.sqrt(items[n].a);
+        if (w > MAX_W) w = MAX_W;
+        if (w < MIN_W) w = MIN_W;
+        w = Math.round(w);
+        var h = w / COVER_AR;
+        if (x > 0 && x + w > W + 0.5) flush();
+        row.push({ g: items[n].g, x: x, y: 0, w: w, h: h });
+        x += w;
+        if (h > rowH) rowH = h;
+      }
+      if (row.length) flush();
+      return { rects: out, height: y };
+    }
+
+    var lo = 1, hi = W * 2, res = null;
+    for (i = 0; i < 34; i++) {
+      var mid = (lo + hi) / 2;
+      var r = run(mid);
+      if (r.height > H) hi = mid;
+      else { lo = mid; res = r; }
+    }
+    return res || run(lo);
+  }
+
+  function renderMap() {
+    var box = $('#treemap');
+    // 按时长看时，从没启动过的游戏没有面积，直接排除
+    var games = currentGames()
+      .filter(function (g) { return metricOf(g) > 0; })
+      .sort(function (a, b) { return metricOf(b) - metricOf(a); });
+
+    if (!games.length) {
+      box.innerHTML = '<div class="empty">'
+        + (state.metric === 'playtime' ? '这些游戏还没有游玩时长记录' : '没有匹配的游戏')
+        + '</div>';
+      $('#mapTitle').textContent = metricLabel() + '分布';
+      return;
+    }
+    // 卡片流会按内容改画布高度，先量一次基准高度再排，避免越排越矮
+    box.style.height = '';
+    var W = box.clientWidth - 12;
+    var H = box.clientHeight - 12;
+    var lay = layoutFlow(games, W, H, metricOf);
+    var rects = lay.rects;
+    // 画布高度跟着内容走，别在底部留一大片空
+    if (lay.height > 0) {
+      box.style.height = Math.max(200, Math.round(lay.height) + 12) + 'px';
+    }
+
+    var libTotal = new Map();
+    DATA.games.forEach(function (g) {
+      libTotal.set(g.lib, (libTotal.get(g.lib) || 0) + 1);
+    });
+    var byLib = {};
+    games.forEach(function (g) {
+      (byLib[g.lib] = byLib[g.lib] || []).push(g);
+    });
+
+    var html = '';
+    rects.forEach(function (r) {
+      var w = Math.max(0, r.w - 2);
+      var h = Math.max(0, r.h - 2);
+      if (w < 3 || h < 3) return;
+
+      var rank = byLib[r.g.lib].indexOf(r.g);
+      var color = tileColor(r.g.lib, rank, libTotal.get(r.g.lib) || 1);
+      var showName = w > 62 && h > 30;
+      var showValue = w > 54 && h > 46;
+      var fs = Math.max(10, Math.min(13, Math.sqrt(w * h) / 7));
+      var sub = state.metric === 'playtime'
+        ? fmtPlaytime(r.g.playtime)
+        : fmt(r.g.size);
+
+      // 太小的卡片铺封面只会糊成一片，还不如纯色清楚
+      var useCover = !!r.g.cover && w >= 68 && h >= 44;
+
+      var style = 'left:' + (r.x + 6) + 'px;top:' + (r.y + 6) + 'px;'
+        + 'width:' + w + 'px;height:' + h + 'px;';
+      if (useCover) {
+        // 底色用同一套色相的暗版：封面等比缩放后剩的那点空隙露出来也不刺眼，
+        // 图片加载失败时也还能看出卡片边界。
+        // 图只存一份在自定义属性 --cv 里，主体图和底下的虚化底共用，报告体积不会翻倍。
+        // url() 必须用单引号——外层 style 属性已经是双引号，里层再用双引号会把属性提前截断，
+        // base64 那一整串会变成垃圾属性，图就不显示了。
+        style += 'background-color:' + tileColor(r.g.lib, rank,
+          libTotal.get(r.g.lib) || 1, true) + ';'
+          + "--cv:url('" + r.g.cover + "');";
+      } else {
+        style += 'background:' + color + ';';
+      }
+
+      html += '<div class="tile' + (useCover ? ' has-cover' : '') + '"'
+        + ' data-id="' + r.g.appid + '" style="' + style + '">'
+        + (useCover ? '<i class="cv"></i>' : '')
+        + (showName
+          ? '<div class="tl"><div class="n" style="font-size:' + fs + 'px">'
+            + esc(r.g.name) + '</div>'
+            + (showValue ? '<div class="s">' + sub + '</div>' : '')
+            + '</div>'
+          : '')
+        + '</div>';
+    });
+
+    box.innerHTML = html;
+    var sumMetric = games.reduce(function (a, g) { return a + metricOf(g); }, 0);
+    $('#mapTitle').textContent = metricLabel() + '分布 · ' + games.length + ' 个游戏 · '
+      + fmtMetric(sumMetric);
+  }
+
+  /* ------------------------------------------------------------------ */
+  /* 排行 / 表格                                                         */
+  /* ------------------------------------------------------------------ */
+  function renderRank() {
+    var games = currentGames()
+      .filter(function (g) { return metricOf(g) > 0; })
+      .sort(function (a, b) { return metricOf(b) - metricOf(a); })
+      .slice(0, 14);
+
+    if (games.length) {
+      $('#rankTitle').textContent = metricLabel() + '排行';
+    }
+    if (!games.length) {
+      $('#rank').innerHTML = '<div class="empty">—</div>';
+      $('#rankCount').textContent = '';
+      return;
+    }
+    var max = metricOf(games[0]) || 1;
+    $('#rankCount').textContent = 'Top ' + games.length;
+    $('#rank').innerHTML = games.map(function (g, i) {
+      var hue = libHue.has(g.lib) ? libHue.get(g.lib) : 212;
+      var shown = state.metric === 'playtime' ? fmtPlaytime(g.playtime) : fmt(g.size);
+      return '<div class="rrow" data-id="' + g.appid + '">'
+        + '<span class="ridx">' + (i + 1) + '</span>'
+        + '<div class="rmain"><div class="rname" title="' + esc(g.name) + '">'
+        + esc(g.name) + '</div><div class="rbar"><i style="width:'
+        + (metricOf(g) / max * 100).toFixed(1)
+        + '%;background:hsl(' + hue + ' 70% 58%)"></i></div></div>'
+        + '<span class="rsize">' + shown + '</span></div>';
+    }).join('');
+  }
+
+  function renderTable() {
+    var games = currentGames().slice();
+    var totalMetric = DATA.games.reduce(function (a, g) {
+      return a + metricOf(g);
+    }, 0) || 1;
+
+    var cmp = {
+      name: function (a, b) { return a.name.localeCompare(b.name, 'zh-CN'); },
+      size: function (a, b) { return a.size - b.size; },
+      playtime: function (a, b) { return (a.playtime || 0) - (b.playtime || 0); },
+      metric: function (a, b) { return metricOf(a) - metricOf(b); },
+      played: function (a, b) { return (a.lastPlayed || 0) - (b.lastPlayed || 0); },
+      libLabel: function (a, b) { return a.lib.localeCompare(b.lib); }
+    };
+    games.sort(cmp[state.sort] || cmp.metric);
+    if (state.dir === -1) games.reverse();
+
+    $('#tblCount').textContent = games.length + ' 个 · '
+      + fmtShort(games.reduce(function (a, g) { return a + g.size; }, 0))
+      + (DATA.totals.playtimeMinutes
+        ? ' · ' + fmtHours(games.reduce(function (a, g) { return a + (g.playtime || 0); }, 0))
+        : '');
+
+    $('#tbody').innerHTML = games.map(function (g, i) {
+      var pct = metricOf(g) / totalMetric * 100;
+      return '<tr data-id="' + g.appid + '">'
+        + '<td class="dim" style="font-family:var(--mono);font-size:11px">' + (i + 1) + '</td>'
+        + '<td><div class="tname"><span>' + esc(g.name) + '</span></div></td>'
+        + '<td class="num">' + fmt(g.size) + '</td>'
+        + '<td class="num' + (g.playtime ? '' : ' dim') + '">' + fmtPlaytime(g.playtime) + '</td>'
+        + '<td class="num"><span class="pbar"><i style="width:'
+        + Math.min(100, pct * 4).toFixed(1) + '%"></i></span>'
+        + '<span class="dim" style="margin-left:6px">' + pct.toFixed(1) + '%</span></td>'
+        + '<td><span class="libtag" title="' + esc(g.lib) + '">'
+        + esc(shortLib(g.lib)) + '</span></td>'
+        + '<td class="num dim" title="' + dateStr(g.lastPlayed) + '">'
+        + ago(g.lastPlayed) + '</td></tr>';
+    }).join('');
+  }
+
+  /* ------------------------------------------------------------------ */
+  /* tooltip                                                             */
+  /* ------------------------------------------------------------------ */
+  var tip = null;
+  function showTip(e, g) {
+    if (!tip) tip = $('#tip');
+    if (!tip) return;
+    var lines = [
+      '占用 ' + fmt(g.size),
+      '时长 ' + fmtPlaytime(g.playtime)
+    ];
+    var eff = hoursPerGb(g);
+    if (eff !== null) {
+      lines.push('效率 ' + (eff < 10 ? eff.toFixed(1) : Math.round(eff)) + ' 小时/GB');
+    }
+    lines.push('位置 ' + esc(shortLib(g.lib)));
+    lines.push('最近启动 ' + dateStr(g.lastPlayed));
+
+    tip.innerHTML = '<div class="tn">' + esc(g.name) + '</div>'
+      + '<div class="tr">' + lines.join('<br>') + '</div>';
+    tip.style.opacity = 1;
+    moveTip(e);
+  }
+  function moveTip(e) {
+    if (!tip) return;
+    var pad = 14;
+    var x = e.clientX + pad, y = e.clientY + pad;
+    var r = tip.getBoundingClientRect();
+    if (x + r.width > innerWidth - 8) x = e.clientX - r.width - pad;
+    if (y + r.height > innerHeight - 8) y = e.clientY - r.height - pad;
+    tip.style.left = x + 'px';
+    tip.style.top = y + 'px';
+  }
+  function hideTip() {
+    if (tip) tip.style.opacity = 0;
+  }
+
+  function focusGame(appid) {
+    var row = document.querySelector('#tbody tr[data-id="' + appid + '"]');
+    if (!row) return;
+    Array.prototype.forEach.call(
+      document.querySelectorAll('#tbody tr.flash'),
+      function (r) { r.classList.remove('flash'); }
+    );
+    row.classList.add('flash');
+    row.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    setTimeout(function () { row.classList.remove('flash'); }, 1800);
+  }
+
+  /* 排序按钮的文案跟着当前指标走 */
+  function syncSortLabel() {
+    var btn = document.querySelector('.toolbar .chip[data-sort="metric"]');
+    if (btn) btn.textContent = state.metric === 'playtime' ? '按时长' : '按大小';
+  }
+
+  /* ------------------------------------------------------------------ */
+  /* 事件绑定（只做一次）                                                 */
+  /* ------------------------------------------------------------------ */
+  function bindEvents() {
+    if (bound) return;
+    bound = true;
+
+    var rt = null;
+    var qInput = $('#q');
+    if (qInput) {
+      qInput.addEventListener('input', function (e) {
+        state.q = e.target.value;
+        clearTimeout(rt);
+        rt = setTimeout(function () {
+          renderMap(); renderRank(); renderTable();
+        }, 90);
+      });
+    }
+
+    var chips = $('#libChips');
+    if (chips) {
+      chips.addEventListener('click', function (e) {
+        var b = e.target.closest('.chip');
+        if (!b) return;
+        state.lib = b.dataset.lib;
+        renderChips(); renderMap(); renderRank(); renderTable();
+      });
+    }
+
+    // 按存储 / 按时长 切换
+    var metricChips = $('#metricChips');
+    if (metricChips) {
+      metricChips.addEventListener('click', function (e) {
+        var b = e.target.closest('.chip');
+        if (!b || b.dataset.metric === state.metric) return;
+        state.metric = b.dataset.metric;
+        Array.prototype.forEach.call(
+          metricChips.querySelectorAll('.chip'),
+          function (c) { c.classList.remove('on'); }
+        );
+        b.classList.add('on');
+        syncSortLabel();
+        renderStats(); renderMap(); renderRank(); renderTable();
+      });
+    }
+
+    Array.prototype.forEach.call(
+      document.querySelectorAll('.toolbar .chip[data-sort]'),
+      function (btn) {
+        btn.addEventListener('click', function () {
+          if (state.sort === btn.dataset.sort) state.dir *= -1;
+          else { state.sort = btn.dataset.sort; state.dir = -1; }
+          Array.prototype.forEach.call(
+            document.querySelectorAll('.toolbar .chip[data-sort]'),
+            function (b) { b.classList.remove('on'); }
+          );
+          btn.classList.add('on');
+          renderTable();
+        });
+      }
+    );
+
+    Array.prototype.forEach.call(
+      document.querySelectorAll('thead th[data-k]'),
+      function (th) {
+        th.addEventListener('click', function () {
+          if (state.sort === th.dataset.k) state.dir *= -1;
+          else { state.sort = th.dataset.k; state.dir = -1; }
+          renderTable();
+        });
+      }
+    );
+
+    document.addEventListener('mouseover', function (e) {
+      var t = e.target.closest && e.target.closest('.tile, .rrow');
+      if (!t) return;
+      var g = gameById.get(Number(t.dataset.id));
+      if (g) showTip(e, g);
+    });
+    document.addEventListener('mousemove', function (e) {
+      if (tip && tip.style.opacity === '1') moveTip(e);
+    });
+    document.addEventListener('mouseout', function (e) {
+      if (e.target.closest && e.target.closest('.tile, .rrow')) hideTip();
+    });
+    document.addEventListener('click', function (e) {
+      var t = e.target.closest && e.target.closest('.tile, .rrow');
+      if (t) focusGame(Number(t.dataset.id));
+    });
+
+    var rrt = null;
+    addEventListener('resize', function () {
+      clearTimeout(rrt);
+      rrt = setTimeout(function () { if (DATA) renderMap(); }, 120);
+    });
+  }
+
+  /* ------------------------------------------------------------------ */
+  /* 对外入口                                                            */
+  /* ------------------------------------------------------------------ */
+  function renderReport(data) {
+    if (!data || !data.games || !data.games.length) {
+      throw new Error('没有可渲染的游戏数据');
+    }
+
+    DATA = data;
+    libHue = new Map();
+    DATA.libraries.forEach(function (l, i) {
+      libHue.set(l.path, HUES[i % HUES.length]);
+    });
+    gameById = new Map(DATA.games.map(function (g) { return [g.appid, g]; }));
+
+    DATA.games.forEach(function (g) {
+      if (typeof g.playtime !== 'number') g.playtime = 0;
+      if (!g.lib) g.lib = 'unknown';
+    });
+
+    state.q = '';
+    state.lib = 'all';
+    state.metric = 'size';
+    state.sort = 'metric';
+
+    if ($('#q')) $('#q').value = '';
+
+    var metricBox = $('#metricChips');
+    if (metricBox && metricBox.querySelectorAll) {
+      Array.prototype.forEach.call(metricBox.querySelectorAll('.chip'), function (c) {
+        if (c.dataset.metric === 'size') c.classList.add('on');
+        else c.classList.remove('on');
+      });
+    }
+
+    bindEvents();
+    syncSortLabel();
+    renderStats();
+    renderChips();
+    renderMap();
+    renderRank();
+    renderTable();
+  }
+  window.renderReport = renderReport;
+
+  /* ------------------------------------------------------------------ */
+  /* Web 版：数据来源（自动检测 / 手动指定 / 拖拽）                        */
+  /* ------------------------------------------------------------------ */
+  var ACF_RE = /^appmanifest_\d+\.acf$/i;
+  var CFG_RE = /^localconfig\.vdf$/i;
+  // Steam 把封面缓存在 appcache/librarycache/<appid>/ 下。只认横版 header：
+  // 竖版 library_600x900 塞进横着的卡片里等比缩放后左右会空一大片，看着像贴错图，
+  // 那种情况交给官方 CDN 上的横版 header 兜底。
+  var COVER_RE = /^header[^\/]*\.jpg$/i;
+  var LIBCACHE_RE = /(?:^|\/)librarycache[\/\\](\d+)[\/\\]/i;
+  var SKIP_DIRS = { common: 1, workshop: 1, shadercache: 1, downloading: 1, temp: 1, music: 1 };
+
+  // 本地缓存没命中时（appcache 被清过、只选了附加库、选了 steamapps 而非 Steam 根目录），
+  // 退回 Steam 官方静态资源。这是公开 CDN，不需要 key，任何用户都能用。
+  // 离线环境下请求会静默失败，卡片自动露出底色，不影响其他信息。
+  // 想彻底断网：console 里执行 window.__STEAM_CDN_COVER = false 再刷新。
+  var CDN_COVER = 'https://cdn.cloudflare.steamstatic.com/steam/apps/';
+
+  function cdnEnabled() {
+    return window.__STEAM_CDN_COVER !== false;
+  }
+
+  function cdnCover(appid) {
+    return CDN_COVER + appid + '/header.jpg';
+  }
+
+  /* 把一张图读成 data URL。blob: 在别的文件里会失效，导出前必须先烘进去 */
+  function toDataUrl(url) {
+    return fetch(url, { mode: 'cors' })
+      .then(function (r) {
+        if (!r.ok) throw new Error('http ' + r.status);
+        return r.blob();
+      })
+      .then(function (b) {
+        return new Promise(function (res, rej) {
+          var fr = new FileReader();
+          fr.onload = function () { res(String(fr.result)); };
+          fr.onerror = function () { rej(fr.error); };
+          fr.readAsDataURL(b);
+        });
+      })
+      .catch(function () { return null; });
+  }
+
+  /* 导出前把封面烘成 data URL，否则 blob: 引用到了新文件里全是死的 */
+  function bakeCovers(data) {
+    var copy = JSON.parse(JSON.stringify(data));
+    var jobs = [];
+    copy.games.forEach(function (g) {
+      if (!g.cover || g.cover.indexOf('data:') === 0) return;
+      jobs.push(toDataUrl(g.cover).then(function (d) {
+        if (d) g.cover = d;
+      }));
+    });
+    return Promise.all(jobs).then(function () { return copy; });
+  }
+
+  /* 同一目录里可能有 header.jpg 和 header_schinese.jpg，按优先级只留一张 */
+  function coverScore(name) {
+    var n = String(name).toLowerCase();
+    if (n === 'header.jpg') return 0;
+    return 1;
+  }
+
+  function keepCover(covers, appid, src, name) {
+    var old = covers[appid];
+    if (!old || coverScore(name) < coverScore(old.name)) {
+      covers[appid] = { name: name, src: src };
+    }
+  }
+
+  function fileSrc(file) {
+    return { getFile: function () { return Promise.resolve(file); } };
+  }
+
+  /* 下面两个包一层，避免闭包捕获到循环变量 */
+  function handleSrc(h) {
+    return { getFile: function () { return h.getFile(); } };
+  }
+
+  function entrySrc(e) {
+    return { getFile: function () { return getFile(e); } };
+  }
+
+  var API = { available: false, root: null };
+  var merged = {};   // appid -> game，多库合并去重
+  var libInfos = []; // 已加载的库
+
+  function setTop(html) {
+    var el = $('#topLine');
+    if (el) el.innerHTML = html;
+  }
+
+  function showErr(msg) {
+    var el = $('#err');
+    if (!el) return;
+    if (!msg) { el.hidden = true; el.textContent = ''; return; }
+    el.hidden = false;
+    el.textContent = msg;
+  }
+
+  /* 判断当前是不是跑在本地服务下（scan.py --serve） */
+  function probeApi() {
+    if (!window.fetch) return Promise.resolve(false);
+    return fetch('/api/version', { cache: 'no-store' })
+      .then(function (r) { return r.ok ? r.json() : null; })
+      .then(function (j) { return !!(j && j.ok); })
+      .catch(function () { return false; });
+  }
+
+  /* ----------------------------- VDF 解析 ----------------------------- */
+  function parseVdf(text) {
+    var tokens = [];
+    var re = /"[^"]*"|[{}]|\/\/[^\n]*/g;
+    var m;
+    while ((m = re.exec(text)) !== null) {
+      var tok = m[0];
+      if (tok.indexOf('//') === 0) continue;
+      if (tok === '{' || tok === '}') tokens.push(tok);
+      else tokens.push({ s: tok.slice(1, -1).replace(/\\"/g, '"').replace(/\\\\/g, '\\') });
+    }
+
+    var pos = 0;
+    function block() {
+      var res = {}, key = null;
+      while (pos < tokens.length) {
+        var t = tokens[pos];
+        if (t === '}') { pos++; return res; }
+        if (t === '{') {
+          pos++;
+          if (key !== null) { res[key] = block(); key = null; }
+          else block();
+        } else {
+          if (key === null) { key = t.s; pos++; }
+          else { res[key] = t.s; key = null; pos++; }
+        }
+      }
+      return res;
+    }
+    return block();
+  }
+
+  function acfToGame(text, libLabel) {
+    var st = parseVdf(text).AppState;
+    if (!st) return null;
+    var appid = parseInt(st.appid, 10);
+    var size = parseInt(st.SizeOnDisk, 10);
+    if (!appid || !size || size <= 0) return null;
+    return {
+      appid: appid,
+      name: (st.name || '').trim() || ('App ' + appid),
+      size: size,
+      playtime: 0,   // 浏览器端读不到 localconfig.vdf 里的时长，留 0
+      lastPlayed: parseInt(st.LastPlayed, 10) || null,
+      lastUpdated: parseInt(st.LastUpdated, 10) || null,
+      installdir: st.installdir || '',
+      lib: libLabel
+    };
+  }
+
+  /* -------------------------- 目录遍历：句柄 -------------------------- */
+  async function walkHandle(dirHandle, depth, out, path, covers) {
+    path = path || '';
+    for await (var entry of dirHandle.values()) {
+      var p = path ? path + '/' + entry.name : entry.name;
+      if (entry.kind === 'file') {
+        if (ACF_RE.test(entry.name)) out.push({ name: entry.name, handle: entry });
+        else if (CFG_RE.test(entry.name)) {
+          out.push({ name: entry.name, handle: entry, isConfig: true, path: p });
+        } else if (COVER_RE.test(entry.name) && covers) {
+          var cm = p.match(LIBCACHE_RE);
+          if (cm) keepCover(covers, cm[1], handleSrc(entry), entry.name);
+        }
+      } else if (depth < 3 && !SKIP_DIRS[entry.name.toLowerCase()]) {
+        // 深度 3 是为了够到 userdata/<账号>/config/localconfig.vdf
+        // 以及 appcache/librarycache/<appid>/header.jpg
+        await walkHandle(entry, depth + 1, out, p, covers);
+      }
+    }
+  }
+
+  /* -------------------------- 目录遍历：拖拽 -------------------------- */
+  function readEntries(reader) {
+    return new Promise(function (res, rej) { reader.readEntries(res, rej); });
+  }
+  function getFile(entry) {
+    return new Promise(function (res, rej) { entry.file(res, rej); });
+  }
+  async function walkEntry(entry, depth, out, covers) {
+    var p = entry.fullPath || entry.name;
+    if (entry.isFile) {
+      if (ACF_RE.test(entry.name)) out.push({ name: entry.name, file: await getFile(entry) });
+      else if (CFG_RE.test(entry.name)) {
+        out.push({ name: entry.name, file: await getFile(entry), isConfig: true, path: p });
+      } else if (COVER_RE.test(entry.name) && covers) {
+        var cm = p.match(LIBCACHE_RE);
+        if (cm) keepCover(covers, cm[1], entrySrc(entry), entry.name);
+      }
+    } else if (entry.isDirectory && depth < 3 && !SKIP_DIRS[entry.name.toLowerCase()]) {
+      var reader = entry.createReader();
+      var batch;
+      do {
+        batch = await readEntries(reader);
+        for (var i = 0; i < batch.length; i++) {
+          await walkEntry(batch[i], depth + 1, out, covers);
+        }
+      } while (batch.length);
+    }
+  }
+
+  /* localconfig.vdf 里存着每个游戏的累计游玩分钟数 */
+  function playtimesFromConfig(text) {
+    var out = {};
+    try {
+      var node = parseVdf(text);
+      ['UserLocalConfigStore', 'Software', 'Valve', 'Steam', 'apps'].forEach(function (k) {
+        node = node && node[k];
+      });
+      if (!node || typeof node !== 'object') return out;
+      Object.keys(node).forEach(function (k) {
+        var v = node[k];
+        if (!v || typeof v !== 'object') return;
+        var m = parseInt(v.Playtime, 10);
+        if (m > 0 && m > (out[k] || 0)) out[k] = m;
+      });
+    } catch (e) { /* 解析失败就当没有时长 */ }
+    return out;
+  }
+
+  function buildData(entries, label, covers) {
+    var games = [];
+    var playtimes = {};
+    var coverUrls = {};
+
+    var jobs = entries.map(function (e) {
+      var p = e.file ? Promise.resolve(e.file) : e.handle.getFile();
+      return p.then(function (file) { return file.text(); })
+        .then(function (txt) {
+          if (e.isConfig) {
+            var map = playtimesFromConfig(txt);
+            Object.keys(map).forEach(function (k) {
+              if (map[k] > (playtimes[k] || 0)) playtimes[k] = map[k];
+            });
+          } else {
+            var g = acfToGame(txt, label);
+            if (g) games.push(g);
+          }
+        })
+        .catch(function () { /* 跳过读不了的文件 */ });
+    });
+
+    // 封面转成 blob URL：本地直接可用，也不会产生任何网络请求
+    var coverJobs = Object.keys(covers || {}).map(function (appid) {
+      return Promise.resolve()
+        .then(function () { return covers[appid].src.getFile(); })
+        .then(function (file) {
+          if (file && typeof URL !== 'undefined' && URL.createObjectURL) {
+            coverUrls[appid] = URL.createObjectURL(file);
+          }
+        })
+        .catch(function () { /* 读不到就退回纯色，不影响主流程 */ });
+    });
+
+    return Promise.all(jobs.concat(coverJobs)).then(function () {
+      if (!games.length) return null;
+      games.forEach(function (g) {
+        g.playtime = playtimes[String(g.appid)] || 0;
+        var id = String(g.appid);
+        if (coverUrls[id]) {
+          g.cover = coverUrls[id];              // 本地缓存，优先
+        } else if (cdnEnabled()) {
+          g.cover = cdnCover(id);               // 本地没有，用官方 CDN 兜底
+        }
+      });
+      games.sort(function (a, b) { return b.size - a.size; });
+      var bytes = games.reduce(function (a, g) { return a + g.size; }, 0);
+      var minutes = games.reduce(function (a, g) { return a + g.playtime; }, 0);
+      return {
+        generatedAt: new Date().toLocaleString('zh-CN', { hour12: false }),
+        steamRoot: label,
+        libraries: [{
+          path: label, total: null, free: null,
+          gameCount: games.length, gameBytes: bytes
+        }],
+        games: games,
+        totals: {
+          bytes: bytes, playtimeMinutes: minutes,
+          count: games.length, libraryCount: 1
+        }
+      };
+    });
+  }
+
+  /* ----------------------------- 合并渲染 ----------------------------- */
+  function flush(note) {
+    var games = Object.keys(merged).map(function (k) { return merged[k]; });
+    if (!games.length) return;
+    games.sort(function (a, b) { return b.size - a.size; });
+
+    renderReport({
+      generatedAt: new Date().toLocaleString('zh-CN', { hour12: false }),
+      steamRoot: libInfos.map(function (l) { return shortLib(l.path); }).join('  +  '),
+      libraries: libInfos,
+      games: games,
+      totals: {
+        bytes: games.reduce(function (a, g) { return a + g.size; }, 0),
+        playtimeMinutes: games.reduce(function (a, g) { return a + (g.playtime || 0); }, 0),
+        count: games.length,
+        libraryCount: libInfos.length
+      }
+    });
+
+    var panel = $('#panel');
+    if (panel) panel.hidden = true;
+    $('#view').classList.add('show');
+    if (note) setTop(note);
+  }
+
+  /* 把一份扫描结果并进当前视图：同 appid 取较大的占用与时长 */
+  function addLibrary(data, note) {
+    (data.games || []).forEach(function (g) {
+      var old = merged[g.appid];
+      if (!old) { merged[g.appid] = g; return; }
+      if (g.size > old.size) old.size = g.size;
+      if ((g.playtime || 0) > (old.playtime || 0)) old.playtime = g.playtime;
+    });
+    (data.libraries || []).forEach(function (l) {
+      var dup = libInfos.some(function (x) { return x.path === l.path; });
+      if (!dup) libInfos.push(l);
+    });
+    flush(note);
+  }
+
+  /* ------------------------- 有本地服务时的操作 ------------------------ */
+  function scanPath(p) {
+    showErr('');
+    return fetch('/api/scan?path=' + encodeURIComponent(p), { cache: 'no-store' })
+      .then(function (r) { return r.json(); })
+      .then(function (j) {
+        if (!j.ok) { showErr(j.error || '扫描失败'); return; }
+        addLibrary(j.data, '已加载 <code>' + esc(j.root) + '</code>');
+      })
+      .catch(function (e) { showErr('请求失败：' + e.message); });
+  }
+
+  function browse(p) {
+    return fetch('/api/browse?path=' + encodeURIComponent(p || ''), { cache: 'no-store' })
+      .then(function (r) { return r.json(); })
+      .then(function (j) {
+        if (!j.ok) { showErr(j.error || '无法读取该目录'); return; }
+        renderBrowser(j);
+      })
+      .catch(function (e) { showErr('请求失败：' + e.message); });
+  }
+
+  function renderBrowser(j) {
+    var box = $('#browser');
+    if (!box) return;
+    box.hidden = false;
+
+    var crumbEl = $('#crumb');
+    crumbEl.innerHTML = (j.parent
+      ? '<a data-nav="' + esc(j.parent) + '">↑ 上一级</a>　'
+      : '')
+      + '<span class="crumb-path">' + esc(j.path || '此电脑') + '</span>';
+
+    var html = '';
+    if (j.path) {
+      html += '<div class="dir use" data-use="' + esc(j.path) + '">'
+        + '<b>✓ 就用这个目录扫描</b></div>';
+    }
+    html += j.dirs.map(function (d) {
+      return '<div class="dir' + (d.isSteam ? ' steam' : '') + '"'
+        + ' data-nav="' + esc(d.path) + '"'
+        + (d.isSteam ? ' data-use="' + esc(d.path) + '"' : '') + '>'
+        + (d.isSteam ? '<span class="star">★</span> ' : '')
+        + esc(d.name) + '</div>';
+    }).join('');
+
+    $('#dirList').innerHTML = html;
+  }
+
+  /* ----------------------- 无本地服务：浏览器手选 ---------------------- */
+  function pickWithDialog() {
+    if (typeof window.showDirectoryPicker !== 'function') {
+      pickWithInput();
+      return;
+    }
+    window.showDirectoryPicker({ id: 'steam-lib', mode: 'read' })
+      .then(function (root) {
+        var found = [];
+        var covers = {};
+        return walkHandle(root, 0, found, '', covers).then(function () {
+          if (!found.length) {
+            showErr('这个文件夹里没找到 appmanifest_*.acf。请选择 Steam 根目录或某个 SteamLibrary 目录。');
+            return null;
+          }
+          return buildData(found, root.name, covers);
+        });
+      })
+      .then(function (data) {
+        if (!data) { showErr('清单解析失败，没有读到有效游戏。'); return; }
+        addLibrary(data, '已从本机读取 <code>' + esc(data.steamRoot) + '</code>，文件未上传');
+      })
+      .catch(function (e) {
+        if (e && e.name === 'AbortError') return;
+        // file:// 打开、或站点被策略限制时，句柄 API 会被拒绝，退回通用选择器
+        if (e && (e.name === 'SecurityError' || e.name === 'NotAllowedError')) {
+          pickWithInput('当前环境限制了目录句柄，已切换到通用选择器。');
+          return;
+        }
+        showErr('读取失败：' + (e && e.message));
+      });
+  }
+
+  /* 通用兜底：<input webkitdirectory> 不需要任何权限，所有主流浏览器都支持 */
+  function pickWithInput(note) {
+    var inp = $('#dirInput');
+    if (!inp) {
+      showErr('当前浏览器不支持选择文件夹，请把文件夹直接拖进页面。');
+      return;
+    }
+    showErr(note || '');
+    inp.value = '';
+    inp.click();
+  }
+
+  function onDirPicked() {
+    var inp = $('#dirInput');
+    if (!inp || !inp.files || !inp.files.length) return;
+
+    var entries = [];
+    var covers = {};
+    var top = '';
+
+    for (var i = 0; i < inp.files.length; i++) {
+      var f = inp.files[i];
+      var rel = f.webkitRelativePath || '';
+      if (!top && rel) top = rel.split('/')[0];
+
+      if (ACF_RE.test(f.name)) {
+        entries.push({ name: f.name, file: f });
+      } else if (CFG_RE.test(f.name) && /(^|\/)userdata\/[^/]+\/config\/localconfig\.vdf$/i.test(rel)) {
+        // 只认 userdata/<账号>/config/ 下的。游戏目录里也有叫 config 的子目录，
+        // 同名文件里没有 Playtime，误读会让人以为时长丢了
+        entries.push({ name: f.name, file: f, isConfig: true });
+      } else if (COVER_RE.test(f.name)) {
+        var cm = rel.match(LIBCACHE_RE);
+        if (cm) keepCover(covers, cm[1], fileSrc(f), f.name);
+      }
+    }
+
+    if (!entries.length) {
+      showErr('这个文件夹里没找到 appmanifest_*.acf。请选择 Steam 根目录或某个 SteamLibrary 目录。');
+      return;
+    }
+
+    var label = top || '所选文件夹';
+    setTop('正在解析 ' + entries.length + ' 个清单文件…');
+
+    buildData(entries, label, covers).then(function (data) {
+      if (!data) { showErr('清单解析失败，没有读到有效游戏。'); return; }
+      addLibrary(data, '已从本机读取 <code>' + esc(label) + '</code>，'
+        + data.games.length + ' 个游戏 · 文件未上传');
+    }).catch(function (e) {
+      showErr('解析失败：' + (e && e.message));
+    });
+  }
+
+  /* --------------------------- 导出单文件报告 -------------------------- */
+  /* 单文件版里 CSS/JS 本来就内联；Pages 版是外部引用，这里补上 */
+  function inlineExternal(root) {
+    var jobs = [];
+
+    Array.prototype.slice.call(root.querySelectorAll('link[rel="stylesheet"]'))
+      .forEach(function (el) {
+        var href = el.getAttribute('href');
+        jobs.push(fetch(href, { cache: 'force-cache' })
+          .then(function (r) {
+            if (!r.ok) throw new Error(href + ' 读取失败');
+            return r.text();
+          })
+          .then(function (css) {
+            var s = document.createElement('style');
+            s.textContent = css;
+            el.parentNode.replaceChild(s, el);
+          }));
+      });
+
+    Array.prototype.slice.call(root.querySelectorAll('script[src]'))
+      .forEach(function (el) {
+        var src = el.getAttribute('src');
+        jobs.push(fetch(src, { cache: 'force-cache' })
+          .then(function (r) {
+            if (!r.ok) throw new Error(src + ' 读取失败');
+            return r.text();
+          })
+          .then(function (js) {
+            var s = document.createElement('script');
+            s.textContent = js.replace(/<\/script/gi, '<\\/script');
+            el.parentNode.replaceChild(s, el);
+          }));
+      });
+
+    return Promise.all(jobs);
+  }
+
+  function exportReport() {
+    if (!DATA || !DATA.games || !DATA.games.length) {
+      showErr('还没有数据可以导出');
+      return;
+    }
+
+    var top = document.documentElement.cloneNode(true);
+
+    var panel = top.querySelector('#panel');
+    if (panel && panel.parentNode) panel.parentNode.removeChild(panel);
+
+    ['#stats', '#libChips', '#treemap', '#rank', '#tbody', '#legend', '#foot', '#tip']
+      .forEach(function (sel) {
+        var el = top.querySelector(sel);
+        if (el) el.innerHTML = '';
+      });
+
+    var view = top.querySelector('#view');
+    if (view && view.classList) view.classList.add('show');
+
+    setTop('正在把封面打包进报告…');
+
+    // 封面在内存里是 blob: 或 CDN 地址，直接写进新文件会失效（blob 绑在本页会话上），
+    // 所以先烘成 data URL，导出的报告才能离线双击就看
+    bakeCovers(DATA).then(function (baked) {
+      return inlineExternal(top).then(function () {
+        var payload = JSON.stringify(baked).replace(/</g, '\\u003c');
+        var head = top.querySelector('head');
+        var boot = document.createElement('script');
+        boot.textContent = 'window.__REPORT_DATA__ = ' + payload + ';';
+        head.insertBefore(boot, head.firstChild);
+
+        var blob = new Blob(['<!DOCTYPE html>\n' + top.outerHTML], { type: 'text/html;charset=utf-8' });
+      var d = new Date();
+      var stamp = d.getFullYear()
+        + String(d.getMonth() + 1).padStart(2, '0')
+        + String(d.getDate()).padStart(2, '0');
+
+      var a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = 'steam-storage-' + stamp + '.html';
+      document.body.appendChild(a);
+      a.click();
+
+      setTimeout(function () {
+        URL.revokeObjectURL(a.href);
+        if (a.parentNode) a.parentNode.removeChild(a);
+      }, 1000);
+
+      showErr('');
+        setTop('已导出单文件报告（' + DATA.games.length + ' 个游戏），拷到任何电脑双击就能打开');
+      });
+    }).catch(function (e) {
+      showErr('导出失败：' + (e && e.message));
+    });
+  }
+
+  /* ------------------------------ 面板控制 ---------------------------- */
+  function showManual(msg, staticMode) {
+    var panel = $('#panel');
+    if (!panel) return;
+    var det = $('#detecting');
+    var man = $('#manual');
+    if (det) det.hidden = true;
+    if (man) man.hidden = false;
+
+    var hint = $('#manualHint');
+    var row = $('.pathrow');
+    var browseBtn = $('#browseBtn');
+
+    if (staticMode) {
+      if (row) row.hidden = true;
+      if (browseBtn) browseBtn.hidden = true;
+      if (hint) hint.textContent = '纯静态页面无权自己读磁盘。点下面的按钮选一个 Steam 目录，或把文件夹直接拖进来。';
+      setTop('纯静态版：全程在本地解析，文件不会上传到任何服务器');
+    } else if (msg) {
+      if (hint) hint.textContent = msg;
+    }
+  }
+
+  function boot() {
+    probeApi().then(function (ok) {
+      API.available = ok;
+      if (!ok) { showManual(null, true); return; }
+
+      setTop('正在自动检测 Steam 目录…');
+      return fetch('/api/detect', { cache: 'no-store' })
+        .then(function (r) { return r.json(); })
+        .then(function (j) {
+          if (!j.ok) { showManual(j.error || '自动检测没命中'); return; }
+          addLibrary(j.data, '已自动检测到 <code>' + esc(j.root) + '</code>'
+            + '（' + esc(j.source) + '）· 所有数据仅在本机处理');
+        })
+        .catch(function () { showManual('自动检测请求失败'); });
+    });
+  }
+
+  function initWeb() {
+    // 导出的报告会预置数据，直接渲染，不显示选择面板
+    if (window.__REPORT_DATA__) {
+      try {
+        renderReport(window.__REPORT_DATA__);
+      } catch (err) {
+        if (window.console) console.error(err);
+      }
+      return;
+    }
+
+    var panel = $('#panel');
+    if (!panel) return;
+
+    var scanBtn = $('#scanBtn');
+    if (scanBtn) {
+      scanBtn.addEventListener('click', function () {
+        var v = ($('#pathInput') || {}).value || '';
+        v = v.trim().replace(/^"|"$/g, '');
+        if (!v) { showErr('先填一个路径'); return; }
+        scanPath(v);
+      });
+    }
+
+    var input = $('#pathInput');
+    if (input) {
+      input.addEventListener('keydown', function (e) {
+        if (e.key === 'Enter') scanBtn.click();
+      });
+    }
+
+    var browseBtn = $('#browseBtn');
+    if (browseBtn) browseBtn.addEventListener('click', function () { browse(''); });
+
+    var pickBtn = $('#pickBtn');
+    if (pickBtn) pickBtn.addEventListener('click', pickWithDialog);
+
+    var dirInput = $('#dirInput');
+    if (dirInput) dirInput.addEventListener('change', onDirPicked);
+
+    var exportBtn = $('#exportBtn');
+    if (exportBtn) exportBtn.addEventListener('click', exportReport);
+
+    var dirList = $('#dirList');
+    if (dirList) {
+      dirList.addEventListener('click', function (e) {
+        var d = e.target.closest('.dir');
+        if (!d) return;
+        if (d.classList.contains('use') || d.classList.contains('steam')) scanPath(d.dataset.use);
+        else browse(d.dataset.nav);
+      });
+    }
+
+    var crumb = $('#crumb');
+    if (crumb) {
+      crumb.addEventListener('click', function (e) {
+        var a = e.target.closest('[data-nav]');
+        if (a) browse(a.dataset.nav);
+      });
+    }
+
+    var addBtn = $('#addBtn');
+    if (addBtn) {
+      addBtn.addEventListener('click', function () {
+        panel.hidden = false;
+        $('#view').classList.remove('show');
+        if (API.available) browse('');
+        else showManual(null, true);
+      });
+    }
+
+    ['dragenter', 'dragover'].forEach(function (ev) {
+      panel.addEventListener(ev, function (e) {
+        e.preventDefault();
+        panel.classList.add('drag');
+      });
+    });
+    ['dragleave', 'drop'].forEach(function (ev) {
+      panel.addEventListener(ev, function (e) {
+        e.preventDefault();
+        panel.classList.remove('drag');
+      });
+    });
+
+    panel.addEventListener('drop', function (e) {
+      var items = e.dataTransfer && e.dataTransfer.items;
+      if (!items || !items.length) return;
+      var entries = [];
+      var covers = {};
+      var tasks = [];
+      for (var i = 0; i < items.length; i++) {
+        var entry = items[i].webkitGetAsEntry && items[i].webkitGetAsEntry();
+        if (entry) tasks.push(walkEntry(entry, 0, entries, covers));
+      }
+      Promise.all(tasks)
+        .then(function () {
+          if (!entries.length) {
+            showErr('拖进来的内容里没有 appmanifest_*.acf 文件。');
+            return null;
+          }
+          return buildData(entries, '拖入的文件夹', covers);
+        })
+        .then(function (data) {
+          if (data) addLibrary(data, '已从拖入的文件夹读取，文件未上传');
+          else showErr('清单解析失败。');
+        })
+        .catch(function (err) { showErr('拖拽读取失败：' + err.message); });
+    });
+
+    boot();
+  }
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', initWeb);
+  } else {
+    initWeb();
+  }
+})();

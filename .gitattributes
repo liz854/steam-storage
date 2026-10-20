@@ -1,0 +1,12 @@
+# 统一换行符，避免 Windows 上提交的 CRLF 把 diff 弄脏
+* text=auto eol=lf
+
+# 产物和图片按二进制处理
+*.svg -text
+*.png binary
+*.jpg binary
+*.ico binary
+
+# 生成物在 diff 里不展开
+dist/steam-storage.html linguist-generated=true
+docs/preview.svg linguist-generated=true
